@@ -1,0 +1,97 @@
+#! /bin/csh -f
+if ($#argv < 3) then
+  echo "mcf_sequence_with_multi_cpx: Minimum Cost Flow Phase Unwrapping Sequence with multi-looking step 30-Oct-2020 uw"
+  echo ""
+  echo "usage: mcf_sequence_with_multi_cpx <diff> <off> <unw> [rlks] [azlks] [cc_min]"
+  echo "       diff             (input) complex valued differential interferogram file (fcomplex)"
+  echo "       off              (input) ISP/offset parameter file  (*.off)"
+  echo "       unw              (output) unwrapped phase file (*.unw)"
+  echo "       rlks             interferogram multi-looking factor in range (integer, default=4)"
+  echo "       azlks            interferogram multi-looking factor in azimuth (integer, default=4)"
+  echo "       cc_min           minimum threshold for correlation in the unwrapping mask (default=.2)"
+  exit
+endif
+
+set diff="$1"
+set off="$2"
+set unw="$3"
+set rlks="2"
+set azlks="2"
+set cc_min="0.2"
+
+if ($#argv >= 4)set rlks=$4
+if ($#argv >= 5)set azlks=$5
+if ($#argv >= 6)set cc_min=$6
+
+echo "diff file:     $diff"
+echo "unw file:      $unw"
+echo "rlks:          $rlks"
+echo "azlks:         $azlks"
+echo "cc_min:        $cc_min"
+
+set width=`awk '$1 == "interferogram_width:" {print $2}' $off`
+echo "width:         $width"
+
+if ( ($rlks > 1) || ($azlks > 1) ) then
+
+  ### multi-looking
+  if(-e $off.2)/bin/rm $off.2 
+  multi_cpx $diff $off $diff.2 $off.2 $rlks $azlks
+  set width2=`awk '$1 == "interferogram_width:" {print $2}' $off.2`
+  echo "multi-looked interferogram width: $width2"
+
+  # estimate coherence-like measure for multi-looked interferogram
+  # reset magnitued
+  cpx_to_real $diff.2 $diff.2.phase $width2 4
+  real_to_cpx - $diff.2.phase $diff.2.phase.cpx $width2 1
+  cc_wave $diff.2.phase.cpx - - $diff.2.cc $width2 5 5 1
+
+  # generate coherence mask
+  rascc_mask $diff.2.cc - $width2 1 1 0 1 1 $cc_min 0.0 0.0 1.0 1. .35 1 $diff.2.cc.bmp
+
+  # unwrapping
+  mcf $diff.2.phase.cpx $diff.2.cc $diff.2.cc.bmp $diff.2.unw $width2 0 0 0 - - 1  
+
+  # interpolate across gaps
+  fill_gaps $diff.2.unw $width2 $diff.2.unw.interp 0 4 - 1  100  4 400
+  
+  # resample to original (not multi-looked) geometry
+  multi_real $diff.2.unw.interp $off.2 $diff.unw.interp $off -"$rlks" -"$azlks" 
+  
+  # use this as model to unwrap original (not multi-looked) differential interferogram
+  unw_model $diff $diff.unw.interp $unw $width
+  
+  if (1) then
+    /bin/rm $diff.2.cc.bmp $diff.2.unw $off.2 $diff.2 $diff.2.phase 
+    /bin/rm $diff.2.unw.interp $diff.unw.interp $diff.2.cc $diff.2.phase.cpx 
+  endif
+else
+
+  echo "no multi-looking used"
+  
+  # estimate coherence-like measure for multi-looked interferogram
+  # reset magnitued
+  cpx_to_real $diff $diff.phase $width 4
+  real_to_cpx - $diff.phase $diff.phase.cpx $width 1
+  cc_wave $diff.phase.cpx - - $diff.cc $width 5 5 1
+
+  # generate coherence mask
+  rascc_mask $diff.cc - $width 1 1 0 1 1 $cc_min 0.0 0.0 1.0 1. .35 1 $diff.cc.bmp
+
+  # unwrapping
+  mcf $diff.phase.cpx $diff.cc $diff.cc.bmp $diff.unw $width 0 0 0 - - 1  
+
+  # interpolate across gaps
+  fill_gaps $diff.unw $width $diff.unw.interp 0 4 - 1  100  4 400
+  
+  # use this as model to unwrap original (not multi-looked) differential interferogram
+  unw_model $diff $diff.unw.interp $unw $width
+
+  if (1) then
+    /bin/rm $diff.cc $diff.phase $diff.cc.bmp $diff.phase.cpx $diff.unw.interp
+  endif
+endif
+
+exit
+
+ 
